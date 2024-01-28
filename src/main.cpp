@@ -1,112 +1,100 @@
 #include <Arduino.h>
+#include <Wire.h>
+#include "max_30010_lib/MAX30100_PulseOximeter.h"
 #include "WiFi.h"
 #include "PubSubClient.h"
-#include <Wire.h>
-#include "MAX30105.h"           //MAX3010x library
-#include "heartRate.h"          //Heart rate  calculating algorithm
-#include "Adafruit_TMP117.h"
-#include "Adafruit_Sensor.h"
 #include "cJSON.h"
+#include <Adafruit_TMP117.h>
+#include <Adafruit_Sensor.h>
 
-/******************** MQTT Defination ********************/
-#define MQTT_SERVER   "YOUR_MQTT_SERVER"
+#define REPORTING_PERIOD_MS 1000
+ 
+#define MQTT_SERVER   "hub.dev.selex.vn"
 #define MQTT_PORT     1883
-#define MQTT_USER     "USER_NAME"
-#define MQTT_PASS     "PASSWORD"
+#define MQTT_USER     "selex"
+#define MQTT_PASS     "selex"
 #define MQTT_TOPIC    "mandevice/human/device_data/create"
 
 /******************** WIFI Configuration ********************/
-#define SSID          "Wifi name"
-#define WIFI_PASS     "Wifi pass"
-
+#define SSID          "Song Quynh"
+#define WIFI_PASS     "songquynh25042112"
 /******************** User Function Pre-Defination ********************/
 void setup_wifi();
 void connect_to_broker();
 
 /******************** User Variable Defination ********************/
-MAX30105              particleSensor;
-Adafruit_TMP117       tmp117;
+PulseOximeter pox;
+uint32_t tsLastReport = 0;
+// Adafruit_TMP117  tmp117;
 WiFiClient            wifiClient;
 PubSubClient          client(wifiClient);
-
-const byte            RATE_SIZE  = 4; //Increase this for more averaging. 4 is good.
-byte                  rates[RATE_SIZE]; //Array  of heart rates
-byte                  rateSpot = 0;
-long                  lastBeat = 0; //Time at which the last  beat occurred
-float                 beatsPerMinute;
-int                   beatAvg;
-int                   oxygen_percent = 90;
+float                 beatAvg;
+int                   oxygen_percent = 96;
 const char*           ssid = SSID;
 const char*           password = WIFI_PASS;
 char                  publish_data[100];
-/******************** Setup Begin ********************/
-void setup() {  
+
+void onBeatDetected()
+{
+  Serial.println("Beat!");
+}
+  
+void setup()
+{
   Serial.begin(115200); 
   //Wifi setup
   setup_wifi();
   client.setServer(MQTT_SERVER, MQTT_PORT );
   connect_to_broker();
-  //  Initialize sensor
-   if (!tmp117.begin()) {
-    Serial.println("Failed to find TMP117 chip");
-    while (1) { delay(10); }
+
+  Serial.print("Initializing pulse oximeter..");
+  
+  if (!pox.begin()) {
+    Serial.println("FAILED");
+    pox.setOnBeatDetectedCallback(onBeatDetected);
   }
-  Serial.println("TMP117 Found!");
-  particleSensor.begin(Wire, I2C_SPEED_FAST); //Use default  I2C port, 400kHz speed
-  particleSensor.setup(); //Configure sensor with default  settings
-  particleSensor.setPulseAmplitudeRed(0x0A); //Turn Red LED to low to  indicate sensor is running
+
+  // while (!tmp117.begin(0x10)) {
+  //   Serial.println("Failed to find TMP117 chip");
+  //   delay(1000);
+  // }
+  // Serial.println("TMP117 Found!");
+
 }
-
-
-/******************** Infinite Loop ********************/
-void loop() {
-
+ 
+void loop()
+{ 
   client.loop();
   if (!client.connected()) {
     connect_to_broker();
   }
+  pox.update();
+  if (millis() - tsLastReport > REPORTING_PERIOD_MS) {
+    Serial.print("Heart BPM:");
+    beatAvg = pox.getHeartRate();
+    Serial.print(pox.getHeartRate());
+    Serial.print("-----");
+    Serial.print("Oxygen Percent:");
+    Serial.print(pox.getSpO2());
+    oxygen_percent = pox.getSpO2();
+    Serial.println("\n");
+    tsLastReport = millis();
 
-  long irValue = particleSensor.getIR();    //Reading the IR value it will permit us to know if there's a finger on the  sensor or not
-  if(irValue > 7000){                                           //If a finger is detected
+    // sensors_event_t temp; // create an empty event to be filled
+    // tmp117.getEvent(&temp); //fill the empty event object with the current measurements
+    // Serial.print("Temperature  "); 
+    // Serial.print(temp.temperature);Serial.println(" degrees C");
+    // Serial.println("");
 
-    if (checkForBeat(irValue) == true)                        //If  a heart beat is detected
-    {
-      tone(3,1000);                                        //And  tone the buzzer for a 100ms you can reduce it it will be better
-      noTone(3);                                          //Deactivate the buzzer  to have the effect of a "bip"
-      //We sensed a beat!
-      long delta = millis()  - lastBeat;                   //Measure duration between two beats
-      lastBeat  = millis();
-      beatsPerMinute = 60 / (delta / 1000.0);           //Calculating  the BPM
-      
-      if (beatsPerMinute < 255 && beatsPerMinute > 20)               //To  calculate the average we strore some values (4) then do some math to calculate the  average
-      {
-        rates[rateSpot++] = (byte)beatsPerMinute; //Store this  reading in the array
-        rateSpot %= RATE_SIZE; //Wrap variable
-        //Take  average of readings
-        beatAvg = 0;
-        for (byte x = 0 ; x < RATE_SIZE  ; x++)
-          beatAvg += rates[x];
-        beatAvg /= RATE_SIZE;
-      }
-    }
+    memset(publish_data, 0, 100);
+   
+    cJSON* root = cJSON_CreateObject();
+    cJSON_AddNumberToObject(root, "heart_beat_bpm", beatAvg);
+    cJSON_AddNumberToObject(root, "oxygen_percent", oxygen_percent);
+
+    cJSON_PrintPreallocated(root,publish_data,100, true);
+    client.publish(MQTT_TOPIC, publish_data);
   }
-  if (irValue < 7000){       //If no finger is detected it inform  the user and put the average BPM to 0 or it will be stored for the next measure
-     beatAvg=0;
-     noTone(3);
-  }
-  sensors_event_t temp; // create an empty event to be filled
-  tmp117.getEvent(&temp); //fill the empty event object with the current measurements
-  Serial.print("Temperature  "); 
-  Serial.print(temp.temperature);
-  Serial.println(" degrees C");
-
-  memset(publish_data, 0, 100);
-  cJSON* root = cJSON_CreateObject();
-  cJSON_AddNumberToObject(root, "heart_beat_bpm", beatAvg);
-  cJSON_AddNumberToObject(root, "oxygen_percent", oxygen_percent);
-  cJSON_AddNumberToObject(root, "temperature", temp.temperature);
-  cJSON_PrintPreallocated(root,publish_data,100, true);
-  client.publish(MQTT_TOPIC, publish_data);
 }
 
 void setup_wifi() {
