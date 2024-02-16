@@ -4,36 +4,45 @@
 #include "WiFi.h"
 #include "PubSubClient.h"
 #include "cJSON.h"
-#include <Adafruit_TMP117.h>
-#include <Adafruit_Sensor.h>
+#include "TMP117.h"
 
-#define REPORTING_PERIOD_MS 1000
+#define REPORTING_PERIOD_MS 5000
  
-#define MQTT_SERVER   "hub.dev.selex.vn"
+#define MQTT_SERVER   "YOUR SERVER"
 #define MQTT_PORT     1883
-#define MQTT_USER     "selex"
-#define MQTT_PASS     "selex"
-#define MQTT_TOPIC    "mandevice/human/device_data/create"
+#define MQTT_USER     "USERNAME"
+#define MQTT_PASS     "PASSWORD"
+#define MQTT_TOPIC    "Topic"
 
 /******************** WIFI Configuration ********************/
-#define SSID          "Song Quynh"
-#define WIFI_PASS     "songquynh25042112"
+#define SSID          "WIFI NAME"
+#define WIFI_PASS     "WIFI PASS"
 /******************** User Function Pre-Defination ********************/
 void setup_wifi();
 void connect_to_broker();
 
 /******************** User Variable Defination ********************/
+// Select the correct address setting
+uint8_t ADDR_GND =  0x48;   // 1001000 
+uint8_t ADDR_VCC =  0x49;   // 1001001
+uint8_t ADDR_SDA =  0x4A;   // 1001010
+uint8_t ADDR_SCL =  0x4B;   // 1001011
+uint8_t ADDR =  ADDR_GND;
+TMP117 tmp(ADDR);
 PulseOximeter pox;
 uint32_t tsLastReport = 0;
-// Adafruit_TMP117  tmp117;
 WiFiClient            wifiClient;
 PubSubClient          client(wifiClient);
 float                 beatAvg;
 int                   oxygen_percent = 96;
+float                 temperature = 36.5;
 const char*           ssid = SSID;
 const char*           password = WIFI_PASS;
 char                  publish_data[100];
 
+bool update_HB = true;
+bool update_SPO2 = true;
+bool update_temp = true;
 void onBeatDetected()
 {
   Serial.println("Beat!");
@@ -42,7 +51,6 @@ void onBeatDetected()
 void setup()
 {
   Serial.begin(115200); 
-  //Wifi setup
   setup_wifi();
   client.setServer(MQTT_SERVER, MQTT_PORT );
   connect_to_broker();
@@ -53,7 +61,7 @@ void setup()
     Serial.println("FAILED");
     pox.setOnBeatDetectedCallback(onBeatDetected);
   }
-
+  tmp.init ( NULL ); 
   // while (!tmp117.begin(0x10)) {
   //   Serial.println("Failed to find TMP117 chip");
   //   delay(1000);
@@ -77,7 +85,11 @@ void loop()
     Serial.print("Oxygen Percent:");
     Serial.print(pox.getSpO2());
     oxygen_percent = pox.getSpO2();
+    Serial.print ("Temperature : ");
+    Serial.print (tmp.getTemperature());
+    Serial.println (" °C");
     Serial.println("\n");
+    
     tsLastReport = millis();
 
     // sensors_event_t temp; // create an empty event to be filled
@@ -85,13 +97,39 @@ void loop()
     // Serial.print("Temperature  "); 
     // Serial.print(temp.temperature);Serial.println(" degrees C");
     // Serial.println("");
-
+    if((round(beatAvg) < 60)){
+      Serial.println("No heartbeat Detect");
+      update_HB = false;
+    }
+    else{
+      update_HB = true;
+    }
+    if(oxygen_percent < 80){
+      Serial.println("No Oxygen percent Detect");
+      update_SPO2 = false;
+    }
+    else{
+      update_SPO2 = true;
+    }
+    if(temperature < 30){
+      Serial.println("No Temperature Detect");
+      update_temp = false;
+    }
+    else{
+      update_temp = true;
+    }
     memset(publish_data, 0, 100);
    
     cJSON* root = cJSON_CreateObject();
-    cJSON_AddNumberToObject(root, "heart_beat_bpm", beatAvg);
-    cJSON_AddNumberToObject(root, "oxygen_percent", oxygen_percent);
-
+    if(update_HB){
+      cJSON_AddNumberToObject(root, "heart_beat_bpm", beatAvg);
+    }
+    if(update_SPO2){
+      cJSON_AddNumberToObject(root, "oxygen_percent", oxygen_percent);
+    }
+    if(update_temp){
+      cJSON_AddNumberToObject(root, "temperature", temperature);
+    }
     cJSON_PrintPreallocated(root,publish_data,100, true);
     client.publish(MQTT_TOPIC, publish_data);
   }
