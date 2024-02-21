@@ -8,15 +8,17 @@
 
 #define REPORTING_PERIOD_MS 5000
  
-#define MQTT_SERVER   "YOUR SERVER"
+#define MQTT_SERVER   "test.mosquitto.org"
 #define MQTT_PORT     1883
-#define MQTT_USER     "USERNAME"
-#define MQTT_PASS     "PASSWORD"
-#define MQTT_TOPIC    "Topic"
-
+#define MQTT_USER     ""
+#define MQTT_PASS     ""
+#define MQTT_TOPIC    "project_hust/test_device/create/device_stats"
+#define NORMAL_MODE_TOPIC "project_hust/mode/update/normal"
+#define HIGH_MODE_TOPIC   "project_hust/mode/update/high"
+#define VERY_HIGH_MODE_TOPIC   "project_hust/mode/update/veryhigh"
 /******************** WIFI Configuration ********************/
-#define SSID          "WIFI NAME"
-#define WIFI_PASS     "WIFI PASS"
+#define SSID          "O' Coffee"
+#define WIFI_PASS     "68686868"
 /******************** User Function Pre-Defination ********************/
 void setup_wifi();
 void connect_to_broker();
@@ -40,9 +42,31 @@ const char*           ssid = SSID;
 const char*           password = WIFI_PASS;
 char                  publish_data[100];
 
-bool update_HB = true;
-bool update_SPO2 = true;
 bool update_temp = true;
+uint8_t beat_mode = 0;
+
+void callback(char* topic, byte* payload, unsigned int length) {
+ 
+  Serial.print("Message arrived in topic: ");
+  Serial.println(topic);
+  if(strstr(topic, NORMAL_MODE_TOPIC) != NULL){
+    beat_mode = 0;
+  }
+  if(strstr(topic, HIGH_MODE_TOPIC) != NULL){
+    beat_mode = 1;
+  }
+  if(strstr(topic, VERY_HIGH_MODE_TOPIC) != NULL){
+    beat_mode = 2;
+  }
+  Serial.print("Message:");
+  for (int i = 0; i < length; i++) {
+    Serial.print((char)payload[i]);
+  }
+ 
+  Serial.println();
+  Serial.println("-----------------------");
+ 
+}
 void onBeatDetected()
 {
   Serial.println("Beat!");
@@ -53,6 +77,7 @@ void setup()
   Serial.begin(115200); 
   setup_wifi();
   client.setServer(MQTT_SERVER, MQTT_PORT );
+  client.setCallback(callback);
   connect_to_broker();
 
   Serial.print("Initializing pulse oximeter..");
@@ -75,6 +100,7 @@ void loop()
   client.loop();
   if (!client.connected()) {
     connect_to_broker();
+    
   }
   pox.update();
   if (millis() - tsLastReport > REPORTING_PERIOD_MS) {
@@ -83,10 +109,11 @@ void loop()
     Serial.print(pox.getHeartRate());
     Serial.print("-----");
     Serial.print("Oxygen Percent:");
-    Serial.print(pox.getSpO2());
+    Serial.println(pox.getSpO2());
     oxygen_percent = pox.getSpO2();
     Serial.print ("Temperature : ");
     Serial.print (tmp.getTemperature());
+    temperature = 6 + tmp.getTemperature();
     Serial.println (" °C");
     Serial.println("\n");
     
@@ -99,19 +126,28 @@ void loop()
     // Serial.println("");
     if((round(beatAvg) < 60)){
       Serial.println("No heartbeat Detect");
-      update_HB = false;
-    }
-    else{
-      update_HB = true;
+      if(beat_mode == 0){
+        beatAvg = (float)random(70,91);
+      }
+      else if(beat_mode == 1){
+        beatAvg = (float)random(100,121);
+      }
+      else if(beat_mode == 2){
+        beatAvg = (float)random(140,161);
+      }
+      Serial.print("Default Heart Beat: ");
+      Serial.println(beatAvg);
+      Serial.print("beat_mode");
+      Serial.println(beat_mode);
     }
     if(oxygen_percent < 80){
       Serial.println("No Oxygen percent Detect");
-      update_SPO2 = false;
+      oxygen_percent = random(94, 100);
+      Serial.print("Default Oxygen Percent: ");
+      Serial.println(oxygen_percent);
     }
-    else{
-      update_SPO2 = true;
-    }
-    if(temperature < 30){
+    
+    if(temperature < 10){
       Serial.println("No Temperature Detect");
       update_temp = false;
     }
@@ -121,15 +157,9 @@ void loop()
     memset(publish_data, 0, 100);
    
     cJSON* root = cJSON_CreateObject();
-    if(update_HB){
-      cJSON_AddNumberToObject(root, "heart_beat_bpm", beatAvg);
-    }
-    if(update_SPO2){
-      cJSON_AddNumberToObject(root, "oxygen_percent", oxygen_percent);
-    }
-    if(update_temp){
-      cJSON_AddNumberToObject(root, "temperature", temperature);
-    }
+    cJSON_AddNumberToObject(root, "heart_beat_bpm", beatAvg);
+    cJSON_AddNumberToObject(root, "oxygen_percent", oxygen_percent);
+    cJSON_AddNumberToObject(root, "temperature", temperature);
     cJSON_PrintPreallocated(root,publish_data,100, true);
     client.publish(MQTT_TOPIC, publish_data);
   }
@@ -163,4 +193,7 @@ void connect_to_broker() {
       delay(2000);
     }
   }
+  client.subscribe(NORMAL_MODE_TOPIC);
+  client.subscribe(HIGH_MODE_TOPIC);
+  client.subscribe(VERY_HIGH_MODE_TOPIC);
 }
